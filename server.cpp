@@ -59,7 +59,7 @@ std::string execSolver(std::string query){
 		close(c2pPipe[0]);
 		close(c2pPipe[1]);
 
-		int ret = execl("/home/rakadjiev/workspace/stp/build/stp", "/home/rakadjiev/workspace/stp/build/stp", "--SMTLIB2", "--print-counterex", (char*)NULL);
+		int ret = execl("/home/rakadjiev/workspace/stpwrap2/build/stpwrap2", "/home/rakadjiev/workspace/stpwrap2/build/stpwrap2", (char*)NULL);
 		exit(ret);
 	}
 	else  {
@@ -92,16 +92,13 @@ int main(int argc, char* argv[]){
 		zframe_t* identity = zmsg_pop(msg);
 		std::string que = zmsg_popstr(msg);
 		zmsg_destroy(&msg);
-		std::cout << "Received service query: \n" + que + "\n";
+		std::cout << "Received service query\n";
 		std::string ans = execSolver(que);
-		std::cout << "Executed solver\n";
 		zmsg_t* ans_msg = zmsg_new();
 		zmsg_addstr(ans_msg, ans.c_str());
 		zmsg_prepend(ans_msg, &identity);
 		zmsg_send(&ans_msg, service);
-		std::cout << "Send service answer\n";
-		zframe_destroy(&identity);
-		zmsg_destroy(&ans_msg);
+		std::cout << "Sent service answer\n";
 	}
 
 	zsock_destroy(&service);
