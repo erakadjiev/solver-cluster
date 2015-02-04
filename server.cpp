@@ -9,6 +9,8 @@
 #include <string>
 #include <iostream>
 
+const std::string server_addr = "tcp://localhost:6790";
+
 std::string execSolver(std::string query){
 	fflush(stdout);
 	fflush(stderr);
@@ -68,40 +70,52 @@ std::string execSolver(std::string query){
 	}
 }
 
+int discovery_handler (zloop_t* reactor, zsock_t* discovery, void *arg){
+	zmsg_t* req = zmsg_recv(discovery);
+	zmsg_destroy(&req);
+	std::cout << "Received discovery request\n";
+	zstr_send(discovery, server_addr.c_str());
+	return 0;
+}
+
+int solver_handler(zloop_t* reactor, zsock_t* solver_service, void *arg){
+	zmsg_t* msg = zmsg_recv(solver_service);
+	zframe_t* identity = zmsg_pop(msg);
+	std::string que = zmsg_popstr(msg);
+	zmsg_destroy(&msg);
+	std::cout << "Received solver_service query\n";
+
+	std::string ans = execSolver(que);
+
+	zmsg_t* ans_msg = zmsg_new();
+	zmsg_addstr(ans_msg, ans.c_str());
+	zmsg_prepend(ans_msg, &identity);
+	zmsg_send(&ans_msg, solver_service);
+	std::cout << "Sent solver_service answer\n";
+	return 0;
+}
+
 int main(int argc, char* argv[]){
 //	if(argc < 2){
 //		return 1;
 //	}
 //	std::string port = argv[1];
-	const std::string server_addr = "tcp://localhost:6790";
 
 	std::cout << "Starting discovery service on port 6789...\n";
 	zsock_t* discovery = zsock_new_rep("tcp://*:6789");
 	assert(discovery);
 
 	std::cout << "Starting solver service on port 6790...\n";
-	zsock_t* service = zsock_new_router("tcp://*:6790");
-	assert(service);
+	zsock_t* solver_service = zsock_new_router("tcp://*:6790");
+	assert(solver_service);
 
-	zmsg_t* req = zmsg_recv(discovery);
-	std::cout << "Received discovery request\n";
-	zstr_send(discovery, server_addr.c_str());
+	zloop_t* reactor = zloop_new ();
+	zloop_reader (reactor, discovery, discovery_handler, NULL);
+	zloop_reader (reactor, solver_service, solver_handler, NULL);
+	zloop_start (reactor);
 
-	while(true){
-		zmsg_t* msg = zmsg_recv(service);
-		zframe_t* identity = zmsg_pop(msg);
-		std::string que = zmsg_popstr(msg);
-		zmsg_destroy(&msg);
-		std::cout << "Received service query\n";
-		std::string ans = execSolver(que);
-		zmsg_t* ans_msg = zmsg_new();
-		zmsg_addstr(ans_msg, ans.c_str());
-		zmsg_prepend(ans_msg, &identity);
-		zmsg_send(&ans_msg, service);
-		std::cout << "Sent service answer\n";
-	}
-
-	zsock_destroy(&service);
+	zloop_destroy (&reactor);
+	zsock_destroy(&solver_service);
 	zsock_destroy(&discovery);
 	std::cout << "Server exiting...\n";
 	return 0;
