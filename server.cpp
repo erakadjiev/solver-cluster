@@ -7,9 +7,10 @@
 
 #include <czmq.h>
 #include <string>
+#include <cstring>
 #include <iostream>
 
-const std::string server_addr = "tcp://localhost:6790";
+const std::string own_port = "6790";
 
 struct solver_reply_info{
 public:
@@ -18,6 +19,33 @@ public:
 	zframe_t* identity;
 	zsock_t* solver_service;
 };
+
+static const std::string get_own_ip(){
+	std::string ip = "";
+
+	struct ifaddrs* if_addrs;
+	int ret = getifaddrs(&if_addrs);
+
+	if(ret == 0){
+		for (struct ifaddrs* if_addr = if_addrs; if_addr != NULL; if_addr = if_addr->ifa_next) {
+			if (if_addr->ifa_addr->sa_family == AF_INET) {
+				if(std::strcmp("eth0", if_addr->ifa_name) == 0){
+					void* net_addr = &((struct sockaddr_in*)if_addr->ifa_addr)->sin_addr;
+					char tmp[INET_ADDRSTRLEN];
+					inet_ntop(AF_INET, net_addr, tmp, INET_ADDRSTRLEN);
+					ip = tmp;
+				}
+			}
+		}
+		if(if_addrs != NULL){
+			freeifaddrs(if_addrs);
+		}
+	}
+
+	return ip;
+}
+
+const std::string own_ip = get_own_ip();
 
 int execSolver(const std::string query){
 	fflush(stdout);
@@ -68,7 +96,6 @@ int execSolver(const std::string query){
 	}
 }
 
-
 int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* arg){
 	// TODO get child pid and wait on it (to avoid having zombies)
 	int fd = child_pipe->fd;
@@ -98,7 +125,7 @@ int discovery_handler(zloop_t* reactor, zsock_t* discovery, void *arg){
 	zmsg_t* req = zmsg_recv(discovery);
 	zmsg_destroy(&req);
 	std::cout << "Received discovery request\n";
-	zstr_send(discovery, server_addr.c_str());
+	zstr_send(discovery, (own_ip + ":" + own_port).c_str());
 	return 0;
 }
 
@@ -128,6 +155,7 @@ int main(int argc, char* argv[]){
 //		return 1;
 //	}
 //	std::string port = argv[1];
+
 
 	std::cout << "Starting discovery service on port 6789...\n";
 	zsock_t* discovery = zsock_new_rep("tcp://*:6789");
