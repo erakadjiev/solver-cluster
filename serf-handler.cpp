@@ -22,7 +22,7 @@ std::string strip_port_tag(std::string s){
 
 int main(int argc, char** argv) {
 	zsock_t* push = zsock_new_push("ipc:///tmp/testsock");
-	zsock_set_linger (push, -1);
+	zsock_set_linger (push, 30000);
 
 	std::string line;
 	std::string ip;
