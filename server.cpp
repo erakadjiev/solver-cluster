@@ -5,17 +5,24 @@
  *      Author: rakadjiev
  */
 
-#include <czmq.h>
-#include <string>
+#include "server.h"
+
 #include <cstring>
 #include <iostream>
 #include <fstream>
 //#include <regex>
 #include <sys/stat.h>
+#include <unistd.h>
 
 const std::string own_port = "6790";
 const std::string join_ip = "10.232.107.213";
 zhashx_t* member_set;
+// this is number of logical CPUs, getting physical cores seems more difficult
+const int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+const int num_solvers = (num_cpus < 3) ? 2 : (num_cpus - 1);
+int running_solvers = 0;
+
+zsock_t* solver_service;
 
 struct solver_reply_info{
 public:
@@ -83,7 +90,7 @@ void process_membership_event(const std::string event_type, const std::string me
 		if(zhashx_lookup(member_set, member_addr.c_str()) != NULL){
 			zhashx_delete(member_set, member_addr.c_str());
 		} else {
-			std::cerr << member_addr << " left the cluster, but we didn't know him.";
+			std::cerr << member_addr << " left the cluster, but we didn't know him.\n";
 		}
 	} else {
 		std::cerr << "Received unknown membership event: " << event_type << " for " << member_addr << "\n";
@@ -96,7 +103,7 @@ int membership_handler(zloop_t* reactor, zsock_t* membership_socket, void* arg){
 	char* port;
 	int count = zstr_recvx(membership_socket, &event_type, &ip, &port, NULL);
 	if(count != 3){
-		std::cerr << count << "-part message received. Membership handler expects 3-part messages.";
+		std::cerr << count << "-part message received. Membership handler expects 3-part messages.\n";
 		return -1;
 	}
 
@@ -217,6 +224,12 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 	zloop_poller_end(reactor, child_pipe);
 	close(fd);
 
+	--running_solvers;
+	if(running_solvers == num_solvers-1){
+		zloop_reader(reactor, solver_service, solver_handler, NULL);
+		std::cout << "Some solvers are ready, continuing to accept queries.\n";
+	}
+
 	solver_reply_info* rep = (solver_reply_info*)arg;
 	zmsg_t* ans_msg = zmsg_new();
 	zmsg_addstr(ans_msg, ans.c_str());
@@ -256,6 +269,12 @@ int solver_handler(zloop_t* reactor, zsock_t* solver_service, void *arg){
 
 	zloop_poller(reactor, &child_pipe, solver_result_handler, rep);
 
+	++running_solvers;
+	if(running_solvers >= num_solvers){
+		zloop_reader_end(reactor, solver_service);
+		std::cout << "All solvers busy, not accepting more queries.\n";
+	}
+
 	return 0;
 }
 
@@ -271,7 +290,7 @@ int main(int argc, char* argv[]){
 	assert(discovery);
 
 	std::cout << "Starting solver service on port 6790...\n";
-	zsock_t* solver_service = zsock_new_router("tcp://*:6790");
+	solver_service = zsock_new_router("tcp://*:6790");
 	assert(solver_service);
 
 	zsock_t* membership_socket = zsock_new_pull("ipc:///tmp/testsock");
