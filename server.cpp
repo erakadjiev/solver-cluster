@@ -8,6 +8,7 @@
 #include "server.h"
 
 #include <cstring>
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 //#include <regex>
@@ -19,17 +20,18 @@ const std::string join_ip = "10.232.107.213";
 zhashx_t* member_set;
 // this is number of logical CPUs, getting physical cores seems more difficult
 const int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-const int num_solvers = (num_cpus < 3) ? 2 : (num_cpus - 1);
+const int num_solvers = std::max(2, num_cpus - 1);
 int running_solvers = 0;
 
 zsock_t* solver_service;
 
 struct solver_reply_info{
 public:
-	explicit solver_reply_info(zframe_t* _identity, zsock_t* _solver_service) :
-		identity(_identity), solver_service(_solver_service){}
+	explicit solver_reply_info(zframe_t* _identity, zsock_t* _solver_service, std::string _message_id) :
+		identity(_identity), solver_service(_solver_service), message_id(_message_id){}
 	zframe_t* identity;
 	zsock_t* solver_service;
+	std::string message_id;
 };
 
 static const std::string get_own_ip(){
@@ -232,6 +234,7 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 
 	solver_reply_info* rep = (solver_reply_info*)arg;
 	zmsg_t* ans_msg = zmsg_new();
+	zmsg_addstr(ans_msg, rep->message_id.c_str());
 	zmsg_addstr(ans_msg, ans.c_str());
 	zmsg_prepend(ans_msg, &(rep->identity));
 	zmsg_send(&ans_msg, rep->solver_service);
@@ -254,6 +257,7 @@ int discovery_handler(zloop_t* reactor, zsock_t* discovery, void *arg){
 int solver_handler(zloop_t* reactor, zsock_t* solver_service, void *arg){
 	zmsg_t* msg = zmsg_recv(solver_service);
 	zframe_t* identity = zmsg_pop(msg);
+	std::string id = zmsg_popstr(msg);
 	std::string que = zmsg_popstr(msg);
 	zmsg_destroy(&msg);
 	std::cout << "Received solver_service query\n";
@@ -265,7 +269,7 @@ int solver_handler(zloop_t* reactor, zsock_t* solver_service, void *arg){
 	child_pipe.fd = fd;
 	child_pipe.events = ZMQ_POLLIN;
 
-	solver_reply_info* rep = new solver_reply_info(identity, solver_service);
+	solver_reply_info* rep = new solver_reply_info(identity, solver_service, id);
 
 	zloop_poller(reactor, &child_pipe, solver_result_handler, rep);
 
