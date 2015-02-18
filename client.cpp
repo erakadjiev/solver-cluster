@@ -9,11 +9,13 @@
 //#include <azmq/socket.hpp>
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
-#include <boost/shared_ptr.hpp>
 #include <boost/fiber/all.hpp>
-#include </usr/local/boost_1_57_0/libs/fiber/examples/asio/loop.hpp>
-#include </usr/local/boost_1_57_0/libs/fiber/examples/asio/spawn.hpp>
-#include </usr/local/boost_1_57_0/libs/fiber/examples/asio/yield.hpp>
+//#include </usr/local/boost_1_57_0_fiber/libs/fiber/examples/asio/loop.hpp>
+//#include </usr/local/boost_1_57_0_fiber/libs/fiber/examples/asio/spawn.hpp>
+//#include </usr/local/boost_1_57_0_fiber/libs/fiber/examples/asio/yield.hpp>
+#include </home/rakadjiev/workspace/modular-boost/libs/fiber/examples/asio/loop.hpp>
+#include </home/rakadjiev/workspace/modular-boost/libs/fiber/examples/asio/spawn.hpp>
+#include </home/rakadjiev/workspace/modular-boost/libs/fiber/examples/asio/yield.hpp>
 #include <iostream>
 
 class non_closing_service : public boost::asio::posix::stream_descriptor_service{
@@ -27,16 +29,20 @@ public:
 
 typedef boost::asio::posix::basic_stream_descriptor<non_closing_service> zmq_asio_socket;
 
-const int num_fibers = 10000;
+const int num_fibers = 2;
 int ready = 0;
 char* response_id = NULL;
 char* response = NULL;
 
-void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service, std::string& query, boost::fibers::asio::yield_context yield){
+volatile int test = 0;
+
+//void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service, std::string& query, boost::fibers::asio::yield_context yield){
+void process_query(std::string id, zsock_t* service, std::string& query){
+//	std::cout << "Worker " << id << " is :" << boost::this_fiber::get_id() << "\n";
 //	std::cout << "Sending query number: " << response_id << "\n";
 	boost::system::error_code ec;
 //	if((zsock_events(service) & ZMQ_POLLOUT) != ZMQ_POLLOUT){
-//		boost::asio::async_write(asio_sock, boost::asio::null_buffers(), boost::fibers::asio::yield[ec]);
+//		boost::asio::async_write(asio_sock, boost::asio::null_buffers(), yield[ec]);
 //	}
 //	std::cout << "Sending SMT query to sock\n";
 	zstr_sendm(service, id.c_str());
@@ -63,41 +69,55 @@ void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service
 	response_id = NULL;
 	response = NULL;
 	++ready;
-//	std::cout << "Fiber " << query << " exits (ready = " << ready << ")\n";
+	std::cout << "Fiber " << id << " exits (ready = " << ready << ")\n";
 }
 
-void reader(boost::asio::io_service& ios, zmq_asio_socket& asio_sock, zsock_t* service, boost::fibers::asio::yield_context yield){
-	boost::this_fiber::yield();
+void reader(zmq_asio_socket& asio_sock, zsock_t* service, boost::fibers::asio::yield_context yield){
+//	std::cout << "Reader is :" << boost::this_fiber::get_id() << "\n";
+//	boost::this_fiber::yield();
 	boost::system::error_code ec;
-	while(true){
-		if (ready >= num_fibers){
-			ios.stop();
-			break;
-		}
-		while(response_id != NULL){
-			boost::this_fiber::yield();
-		}
+//	boost::asio::io_service& ios = asio_sock.get_io_service();
+	while(ready < num_fibers){
+		++test;
+		std::cout << "Reader incr. test\n";
 		if((zsock_events(service) & ZMQ_POLLIN) != ZMQ_POLLIN){
-			boost::asio::async_read(asio_sock, boost::asio::null_buffers(), boost::fibers::asio::yield[ec]);
+			std::cout << "Reader no pollin\n";
+			boost::asio::async_read(asio_sock, boost::asio::null_buffers(), yield[ec]);
 		}
+		std::cout << "Reader readin\n";
 		zmsg_t* msg = zmsg_recv(service);
 		response_id = zmsg_popstr(msg);
 		response = zmsg_popstr(msg);
 		zmsg_destroy(&msg);
 //		std::cout << "Received result: " << response_id << "\n";
-		boost::this_fiber::yield();
-	}
-}
-
-void main_fiber(boost::asio::io_service& ios, zmq_asio_socket& asio_sock, zsock_t* service, std::string& query, boost::fibers::asio::yield_context yield){
-	boost::fibers::asio::spawn(ios, boost::bind(reader, boost::ref(ios), boost::ref(asio_sock), service, _1));
-	for(int i = 0; i<num_fibers; ++i){
-		boost::fibers::asio::spawn(ios, boost::bind(process_query, boost::to_string(i), boost::ref(asio_sock), service, boost::ref(query), _1));
-		if(i%500 == 0 && i != 0){
+		while(response_id != NULL){
 			boost::this_fiber::yield();
 		}
 	}
-//	std::cout << "Main fiber" << boost::this_fiber::get_id() << " exits\n";
+	boost::asio::io_service& ios = asio_sock.get_io_service();
+//	while(!ios.stopped()){
+//		asio_sock.close();
+		ios.stop();
+//	}
+	std::cout << "Reader exits\n";
+}
+
+void main_fiber(zmq_asio_socket& asio_sock, zsock_t* service, std::string& query){
+//	std::cout << "Main is :" << boost::this_fiber::get_id() << "\n";
+//	std::cout << "Main 2\n";
+//	std::cout << "Main 3\n";
+	for(int i = 0; i<num_fibers; ++i){
+		boost::fibers::fiber(boost::bind(process_query, std::to_string(i), service, std::ref(query))).detach();
+//		std::cout << "Main 4\n";
+//		boost::fibers::fiber(boost::bind(process_query, std::to_string(i), service, std::ref(query))).detach();
+//		boost::fibers::asio::spawn(ios, boost::bind(process_query, std::to_string(i), std::ref(asio_sock), service, std::ref(query), _1));
+//		std::cout << "Main 5\n";
+//		if(i%500 == 0 && i != 0){
+//			boost::this_fiber::yield();
+//		}
+	}
+	++test;
+	std::cout << "Main fiber exits\n";
 }
 
 int main(int argc, char* argv[]){
@@ -127,23 +147,30 @@ int main(int argc, char* argv[]){
 	zsock_destroy(&discovery);
 
     //---------------------------------//
-
+	try	{
 	int zfd = zsock_fd(service);
 
 	boost::asio::io_service ios;
+	boost::asio::io_service::work work(ios);
 
 	zmq_asio_socket asio_sock(ios, zfd);
     asio_sock.non_blocking(true);
 
-    boost::fibers::asio::spawn(ios, boost::bind(main_fiber, boost::ref(ios), boost::ref(asio_sock), service, boost::ref(smt_query), _1));
+    boost::fibers::fiber(boost::bind(main_fiber, std::ref(asio_sock), service, std::ref(smt_query))).detach();
+	boost::fibers::asio::spawn(asio_sock.get_io_service(), boost::bind(reader, std::ref(asio_sock), service, _1));
 
-	boost::fibers::fiber f(boost::bind(boost::fibers::asio::run_service, boost::ref(ios)));
-	f.join();
+    boost::fibers::fiber ios_runner(boost::bind(boost::fibers::asio::run_service, std::ref(ios)));
+    std::cout << "Join IO Runner\n";
+    ios_runner.join();
+    std::cout << "IO Runner finished\n";
 
 	zhashx_destroy(&solvers);
 	zsock_set_linger(service, 0);
 	asio_sock.close();
 	zsock_destroy(&service);
 	std::cout << "client1 exiting...\n";
+	} catch ( std::exception const& e){
+		std::cerr << "Exception: " << e.what() << "\n";
+	}
 	return 0;
 }
