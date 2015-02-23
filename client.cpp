@@ -5,27 +5,19 @@
   *      Author: rakadjiev
   */
 
-#include <czmq.h>
-#include <boost/asio.hpp>
-#include <boost/bind.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/fiber/all.hpp>
-#include <boost/fiber/asio/loop.hpp>
-#include <boost/fiber/asio/spawn.hpp>
-#include <boost/fiber/asio/yield.hpp>
 #include <iostream>
 #include <unordered_map>
 
-class non_closing_service : public boost::asio::posix::stream_descriptor_service{
-public:
-	explicit non_closing_service(boost::asio::io_service& io_service) : boost::asio::posix::stream_descriptor_service(io_service){}
-	void destroy(typename boost::asio::posix::stream_descriptor_service::implementation_type& impl){}
-	boost::system::error_code close(boost::asio::detail::reactive_descriptor_service::implementation_type& impl, boost::system::error_code& ec){
-		return ec;
-	}
-};
+#include "zmq_asio_socket.hpp"
 
-typedef boost::asio::posix::basic_stream_descriptor<non_closing_service> zmq_asio_socket;
+#include <czmq.h>
+#include <boost/bind.hpp>
+#include <boost/fiber/fiber.hpp>
+#include <boost/fiber/asio/loop.hpp>
+#include <boost/fiber/asio/spawn.hpp>
+#include <boost/fiber/asio/yield.hpp>
+
+
 
 const int num_fibers = 100000;
 int ready = 0;
