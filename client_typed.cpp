@@ -9,23 +9,27 @@
 #include <unordered_map>
 
 #include "zmq_asio_socket.hpp"
+#include "typed_fiber.hpp"
+#include "typed_fiber_context.hpp"
+#include "solver_scheduler.hpp"
 
 #include <czmq.h>
 #include <boost/bind.hpp>
 #include <boost/fiber/fiber.hpp>
 #include <boost/fiber/asio/loop.hpp>
-#include <boost/fiber/asio/spawn.hpp>
+#include "typed_spawn.hpp"
 #include <boost/fiber/asio/yield.hpp>
 
 
 
-const int num_fibers = 100000;
+const int num_fibers = 10000000;
 int ready = 0;
 std::unordered_map<unsigned int, boost::fibers::promise<std::string>> promises;
 
 void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service, std::string& query){
 //	std::cout << id << " Sending query \n";
 	boost::system::error_code ec;
+//	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
 //	if((zsock_events(service) & ZMQ_POLLOUT) != ZMQ_POLLOUT){
 //		boost::asio::async_write(asio_sock, boost::asio::null_buffers(), boost::fibers::asio::yield[ec]);
 //	}
@@ -33,19 +37,24 @@ void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service
 	zstr_sendm(service, id.c_str());
 	int rc = zstr_send(service, query.c_str());
 	assert(rc == 0);
-//	std::cout << "Sent query " << query << "\n";
 
 	boost::fibers::promise<std::string> p;
 	boost::fibers::future<std::string> f = p.get_future();
 	promises.insert(std::make_pair(std::stoi(id), std::move(p)));
+	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->set_type(typed_fiber_context::fiber_type::RECEIVER);
 	std::string ans = f.get();
 
+//	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
 	promises.erase(std::stoi(id));
 
+
+//	std::cout << "Sent query " << query << "\n";
+//	while((response_id == NULL) || (id.compare(response_id) != 0)){
+//		boost::this_fiber::yield();
+//	}
 //	std::cout << id << " Receiving result\n";
-	if (ans.empty()){
-		std::cerr << "Received \"null\" response from server\n";
-	}
+//	if (response == NULL){
+//		std::cerr << "Received \"null\" response from server\n";
 //	} else {
 //		if(id.compare(response_id) != 0){
 //			std::cout << "Mismatch: " << id << " != " << response << "\n";
@@ -53,7 +62,7 @@ void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service
 //			std::cout << "Match: " << id << " == " << response << "\n";
 //		}
 //		std::cout << "Result number " << response_id << ":\n" << result << "\n";
-//	}
+//	}*/
 //	std::cout << id << "'s response is:\n" << ans << "\n";
 	++ready;
 //	std::cout << "Fiber " << query << " exits (ready = " << ready << ")\n";
@@ -61,6 +70,7 @@ void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service
 
 void reader(zmq_asio_socket& asio_sock, zsock_t* service, boost::fibers::asio::yield_context yield){
 	boost::system::error_code ec;
+//	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
 	while(true){
 		if (ready >= num_fibers){
 			asio_sock.get_io_service().stop();
@@ -98,9 +108,10 @@ void reader(zmq_asio_socket& asio_sock, zsock_t* service, boost::fibers::asio::y
 }
 
 void main_fiber(zmq_asio_socket& asio_sock, zsock_t* service, std::string& query){
-	boost::fibers::asio::spawn(asio_sock.get_io_service(), boost::bind(reader, std::ref(asio_sock), service, _1));
+//	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
+	boost::fibers::asio::spawn(asio_sock.get_io_service(), boost::bind(reader, std::ref(asio_sock), service, _1), typed_fiber_creator(typed_fiber_context::fiber_type::READER));
 	for(int i = 0; i<num_fibers; ++i){
-		boost::fibers::fiber(boost::bind(process_query, std::to_string(i), std::ref(asio_sock), service, std::ref(query))).detach();
+		typed_fiber(typed_fiber_context::fiber_type::SENDER, boost::bind(process_query, std::to_string(i), std::ref(asio_sock), service, std::ref(query))).detach();
 		if(i%500 == 0 && i != 0){
 			if(i%5000 == 0 && i != 0){
 				std::cout << "Sent " << i << "\n";
@@ -146,14 +157,17 @@ void main_fiber(zmq_asio_socket& asio_sock, zsock_t* service, std::string& query
 	zmq_asio_socket asio_sock(ios, zfd);
     asio_sock.non_blocking(true);
 
-    boost::fibers::fiber(boost::bind(main_fiber, std::ref(asio_sock), service, std::ref(smt_query))).detach();
+    solver_scheduler scheduler;
+    boost::fibers::set_scheduling_algorithm(&scheduler);
+
+    typed_fiber(typed_fiber_context::fiber_type::MAIN, boost::bind(main_fiber, std::ref(asio_sock), service, std::ref(smt_query))).detach();
 
 //    boost::fibers::asio::spawn(ios, boost::bind(reader, std::ref(ios), std::ref(asio_sock), service, _1));
 //    for(int i = 0; i<num_fibers; ++i){
 //    	boost::fibers::fiber(boost::bind(process_query, std::to_string(i), std::ref(asio_sock), service, std::ref(smt_query))).detach();
 //    }
 
-	boost::fibers::fiber f(boost::bind(boost::fibers::asio::run_service, std::ref(ios)));
+	typed_fiber f(typed_fiber_context::fiber_type::WORKER, boost::bind(boost::fibers::asio::run_service, std::ref(ios)));
 	f.join();
 
 	zhashx_destroy(&solvers);
