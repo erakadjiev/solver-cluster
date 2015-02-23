@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-std::string execSolver(const std::string query){
+std::string exec_solver(const std::string query){
 	fflush(stdout);
 	fflush(stderr);
 
@@ -74,7 +74,7 @@ int main(int argc, char* argv[]){
 	std::cout << "client1 starting...\n";
 
     for(int i = 0; i<10000; ++i){
-    	std::string ans = execSolver(smt_query);
+    	std::string ans = exec_solver(smt_query);
     }
 
 	std::cout << "client1 exiting...\n";

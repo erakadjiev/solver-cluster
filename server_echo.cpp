@@ -163,7 +163,7 @@ int exec_serf(const std::string serf_path){
 	}
 }
 
-int execSolver(const std::string query){
+int exec_solver(const std::string query){
 	fflush(stdout);
 	fflush(stderr);
 
@@ -264,7 +264,7 @@ int solver_handler(zloop_t* reactor, zsock_t* solver_service, void *arg){
 	zmsg_destroy(&msg);
 	std::cout << "Received solver_service query\n";
 
-	int fd = execSolver(que);
+	int fd = exec_solver(que);
 
 	zmq_pollitem_t child_pipe;
 	child_pipe.socket = NULL;
