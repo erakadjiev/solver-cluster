@@ -25,15 +25,6 @@ int running_solvers = 0;
 
 zsock_t* solver_service;
 
-struct solver_reply_info{
-public:
-	explicit solver_reply_info(zframe_t* _identity, zsock_t* _solver_service, std::string _message_id) :
-		identity(_identity), solver_service(_solver_service), message_id(_message_id){}
-	zframe_t* identity;
-	zsock_t* solver_service;
-	std::string message_id;
-};
-
 static const std::string get_own_ip(){
 	std::string ip = "";
 
@@ -126,6 +117,7 @@ int membership_handler(zloop_t* reactor, zsock_t* membership_socket, void* arg){
 
 	zstr_free(&event_type);
 	zstr_free(&ip);
+	zstr_free(&port);
 	return 0;
 }
 
@@ -163,7 +155,7 @@ int exec_serf(const std::string serf_path){
 	}
 }
 
-int execSolver(const std::string query){
+solver_proc_info* exec_solver(const std::string query){
 	fflush(stdout);
 	fflush(stderr);
 
@@ -174,7 +166,7 @@ int execSolver(const std::string query){
 			pipe(p2cPipe) ||
 			pipe(c2pPipe)){
 		std::cerr << "Failed to pipe\n";
-		return -1;
+		return NULL;
 	}
 
 	pid_t pid = fork();
@@ -187,7 +179,7 @@ int execSolver(const std::string query){
 		close(p2cPipe[1]);
 
 		// TODO return child pid, so that we can wait on it later (to avoid having zombies)
-		return c2pPipe[0];
+		return new solver_proc_info(pid, c2pPipe[0]);
 	}
 	else if (pid == 0) {
 		// child
@@ -203,12 +195,12 @@ int execSolver(const std::string query){
 		close(c2pPipe[0]);
 		close(c2pPipe[1]);
 
-		int ret = execl("/home/ltc/workspace/stpwrap2/build/stpwrap2", "/home/ltc/workspace/stpwrap2/build/stpwrap2", (char*)NULL);
+		int ret = execl("/home/ltc/workspace/stpwrap", "/home/ltc/workspace/stpwrap", (char*)NULL);
 		exit(ret);
 	}
 	else {
 		std::cerr << "Failed to fork!\n";
-		return -1;
+		return NULL;
 	}
 }
 
@@ -225,20 +217,22 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 
 	zloop_poller_end(reactor, child_pipe);
 	close(fd);
+	solver_reply_info* rep = (solver_reply_info*)arg;
+	waitpid(rep->pid, NULL, WNOHANG | WUNTRACED);
 
 	--running_solvers;
 	if(running_solvers == num_solvers-1){
 		zloop_reader(reactor, solver_service, solver_handler, NULL);
-		std::cout << "Some solvers are ready, continuing to accept queries.\n";
+//		std::cout << "Some solvers are ready, continuing to accept queries.\n";
 	}
 
-	solver_reply_info* rep = (solver_reply_info*)arg;
 	zmsg_t* ans_msg = zmsg_new();
 	zmsg_addstr(ans_msg, rep->message_id.c_str());
 	zmsg_addstr(ans_msg, ans.c_str());
 	zmsg_prepend(ans_msg, &(rep->identity));
 	zmsg_send(&ans_msg, rep->solver_service);
-	std::cout << "Sent solver_service answer\n";
+//	std::cout << "Sent solver_service answer\n";
+	zframe_destroy(&(rep->identity));
 	delete rep;
 
 	return 0;
@@ -257,26 +251,29 @@ int discovery_handler(zloop_t* reactor, zsock_t* discovery, void *arg){
 int solver_handler(zloop_t* reactor, zsock_t* solver_service, void *arg){
 	zmsg_t* msg = zmsg_recv(solver_service);
 	zframe_t* identity = zmsg_pop(msg);
-	std::string id = zmsg_popstr(msg);
-	std::string que = zmsg_popstr(msg);
+	char* id = zmsg_popstr(msg);
+	char* que = zmsg_popstr(msg);
 	zmsg_destroy(&msg);
-	std::cout << "Received solver_service query\n";
+//	std::cout << "Received solver_service query\n";
 
-	int fd = execSolver(que);
+	solver_proc_info* proc = exec_solver(que);
+	zstr_free(&que);
 
 	zmq_pollitem_t child_pipe;
 	child_pipe.socket = NULL;
-	child_pipe.fd = fd;
+	child_pipe.fd = proc->fd;
 	child_pipe.events = ZMQ_POLLIN;
 
-	solver_reply_info* rep = new solver_reply_info(identity, solver_service, id);
+	solver_reply_info* rep = new solver_reply_info(identity, proc->pid, solver_service, id);
+	zstr_free(&id);
+	delete proc;
 
 	zloop_poller(reactor, &child_pipe, solver_result_handler, rep);
 
 	++running_solvers;
 	if(running_solvers >= num_solvers){
 		zloop_reader_end(reactor, solver_service);
-		std::cout << "All solvers busy, not accepting more queries.\n";
+//		std::cout << "All solvers busy, not accepting more queries.\n";
 	}
 
 	return 0;
