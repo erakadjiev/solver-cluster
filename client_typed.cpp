@@ -22,7 +22,7 @@
 
 
 
-const int num_fibers = 10000000;
+const int num_fibers = 10000;
 int ready = 0;
 std::unordered_map<unsigned int, boost::fibers::promise<std::string>> promises;
 
@@ -42,6 +42,7 @@ void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service
 	boost::fibers::future<std::string> f = p.get_future();
 	promises.insert(std::make_pair(std::stoi(id), std::move(p)));
 	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->set_type(typed_fiber_context::fiber_type::RECEIVER);
+
 	std::string ans = f.get();
 
 //	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
@@ -71,48 +72,51 @@ void process_query(std::string& id, zmq_asio_socket& asio_sock, zsock_t* service
 void reader(zmq_asio_socket& asio_sock, zsock_t* service, boost::fibers::asio::yield_context yield){
 	boost::system::error_code ec;
 //	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
+	int read = 0;
 	while(true){
-		if (ready >= num_fibers){
+		if ((ready + read) >= num_fibers){
 			asio_sock.get_io_service().stop();
 			std::cout << "Stopped IO Service, unfulfilled promises left: " << promises.size() << "\n";
 			break;
 		}
 
-		int read = 0;
-		boost::asio::async_read(asio_sock, boost::asio::null_buffers(), yield[ec]);
-		while((zsock_events(service) & ZMQ_POLLIN) == ZMQ_POLLIN){
-//			std::cout << "Reader reading\n";
-			zmsg_t* msg = zmsg_recv(service);
-			char* response_id = zmsg_popstr(msg);
-			char* response = zmsg_popstr(msg);
-			zmsg_destroy(&msg);
+		read = 0;
+		if(!(zsock_events(service) & ZMQ_POLLIN)){
+			asio_sock.async_read_some(boost::asio::null_buffers(), yield[ec]);
+		} else {
+			do{
+	//			std::cout << "Reader reading\n";
+				zmsg_t* msg = zmsg_recv(service);
+				char* response_id = zmsg_popstr(msg);
+				char* response = zmsg_popstr(msg);
+				zmsg_destroy(&msg);
 
 
-			auto elem = promises.find(std::stoi(response_id));
+				auto elem = promises.find(std::stoi(response_id));
 
-			if ( elem == promises.end() ){
-				std::cout << "Promise not found\n";
-			}
-			else {
-				elem->second.set_value(std::string(response));
-			}
+				if ( elem == promises.end() ){
+					std::cout << "Promise not found\n";
+				}
+				else {
+					elem->second.set_value(std::string(response));
+				}
 
-			zstr_free(&response_id);
-			zstr_free(&response);
-			++read;
-			if(read % 500 == 0){
-				boost::this_fiber::yield();
-			}
+				zstr_free(&response_id);
+				zstr_free(&response);
+				++read;
+				if(read % 100 == 0){
+					boost::this_fiber::yield();
+				}
+			}while((zsock_events(service) & ZMQ_POLLIN) == ZMQ_POLLIN);
 		}
 	}
 }
 
 void main_fiber(zmq_asio_socket& asio_sock, zsock_t* service, std::string& query){
 //	(static_cast<typed_fiber_context*>(boost::fibers::detail::scheduler::instance()->active()))->print_type();
-	boost::fibers::asio::spawn(asio_sock.get_io_service(), boost::bind(reader, std::ref(asio_sock), service, _1), typed_fiber_creator(typed_fiber_context::fiber_type::READER));
-	for(int i = 0; i<num_fibers; ++i){
+	for(int i = 1; i<=num_fibers; ++i){
 		typed_fiber(typed_fiber_context::fiber_type::SENDER, boost::bind(process_query, std::to_string(i), std::ref(asio_sock), service, std::ref(query))).detach();
-		if(i%500 == 0 && i != 0){
+		if(i%100 == 0 && i != 0){
 			if(i%5000 == 0 && i != 0){
 				std::cout << "Sent " << i << "\n";
 			}
@@ -155,10 +159,11 @@ void main_fiber(zmq_asio_socket& asio_sock, zsock_t* service, std::string& query
 	boost::asio::io_service ios;
 
 	zmq_asio_socket asio_sock(ios, zfd);
-    asio_sock.non_blocking(true);
 
     solver_scheduler scheduler;
     boost::fibers::set_scheduling_algorithm(&scheduler);
+
+    boost::fibers::asio::spawn(ios, boost::bind(reader, std::ref(asio_sock), service, _1), typed_fiber_creator(typed_fiber_context::fiber_type::READER));
 
     typed_fiber(typed_fiber_context::fiber_type::MAIN, boost::bind(main_fiber, std::ref(asio_sock), service, std::ref(smt_query))).detach();
 
