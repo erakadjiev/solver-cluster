@@ -178,7 +178,6 @@ solver_proc_info* exec_solver(const std::string query){
 		int ret = write(p2cPipe[1], query.c_str(), query.length()+1);
 		close(p2cPipe[1]);
 
-		// TODO return child pid, so that we can wait on it later (to avoid having zombies)
 		return new solver_proc_info(pid, c2pPipe[0]);
 	}
 	else if (pid == 0) {
@@ -205,7 +204,6 @@ solver_proc_info* exec_solver(const std::string query){
 }
 
 int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* arg){
-	// TODO get child pid and wait on it (to avoid having zombies)
 	int fd = child_pipe->fd;
 	int readBytes = 1;
 	char buf[100];
@@ -232,7 +230,6 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 	zmsg_prepend(ans_msg, &(rep->identity));
 	zmsg_send(&ans_msg, rep->solver_service);
 //	std::cout << "Sent solver_service answer\n";
-	zframe_destroy(&(rep->identity));
 	delete rep;
 
 	return 0;
