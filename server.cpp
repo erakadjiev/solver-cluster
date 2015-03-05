@@ -12,6 +12,7 @@
 #include <iostream>
 #include <fstream>
 //#include <regex>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -136,6 +137,9 @@ int exec_serf(const std::string serf_path){
 	else if (pid == 0) {
 		// child
 
+		// Terminate child if parent dies (works only in Linux)
+		prctl(PR_SET_PDEATHSIG, SIGTERM);
+		
 		// we don't want to see Serf output
 		// TODO log to file instead
 		freopen("/dev/null", "w", stdout);
@@ -182,8 +186,11 @@ solver_proc_info* exec_solver(const std::string query){
 	}
 	else if (pid == 0) {
 		// child
-		if(
-				dup2(p2cPipe[0], STDIN_FILENO) == -1 ||
+		
+		// Terminate child if parent dies (works only in Linux)
+		prctl(PR_SET_PDEATHSIG, SIGTERM);
+		
+		if(dup2(p2cPipe[0], STDIN_FILENO) == -1 ||
 				dup2(c2pPipe[1], STDOUT_FILENO) == -1 ||
 				dup2(c2pPipe[1], STDERR_FILENO) == -1){
 			std::cerr << "Failed to redirect stdin/stdout/stderr\n";
@@ -313,7 +320,8 @@ int main(int argc, char* argv[]){
 	zsock_destroy(&discovery);
 	zsock_destroy(&membership_socket);
 	zhashx_destroy(&member_set);
-	waitpid(serf_pid, NULL, WNOHANG | WUNTRACED);
+	kill(serf_pid, SIGTERM);
+	waitpid(serf_pid, NULL, WUNTRACED);
 	std::cout << "Server exiting...\n";
 	return 0;
 }
