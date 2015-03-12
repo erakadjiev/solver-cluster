@@ -223,7 +223,41 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 	zloop_poller_end(reactor, child_pipe);
 	close(fd);
 	solver_reply_info* rep = (solver_reply_info*)arg;
-	waitpid(rep->pid, NULL, WNOHANG | WUNTRACED);
+	
+	unsigned short solver_status = 0;
+	
+	int status;
+	pid_t res = waitpid(rep->pid, &status, WNOHANG | WUNTRACED);
+	
+	if (res < 0) {
+		std::cerr << "ERROR: waitpid() for STP failed";
+		solver_status = 3;
+	}
+
+	// From timed_run.py: It appears that linux at least will on
+	// "occasion" return a status when the process was terminated by a
+	// signal, so test signal first.
+	if (WIFSIGNALED(status) || !WIFEXITED(status)) {
+		std::cerr << "error: STP did not return successfully.  Most likely you forgot to run 'ulimit -s unlimited'\n";
+		solver_status = 3;
+	}
+
+	int exitcode = WEXITSTATUS(status);
+	if (exitcode==0) {
+		// has solution
+		solver_status = 0;
+	} else if (exitcode==1) {
+		// doesn't have solution
+		solver_status = 1;
+	} else if (exitcode==52) {
+		// timeout
+		std::cerr << "STP timed out";
+		solver_status = 2;
+	} else {
+		// some problem
+		std::cerr << "error: STP did not return a recognized code";
+		solver_status = 3;
+	}
 
 	--running_solvers;
 	if(running_solvers == num_solvers-1){
@@ -233,7 +267,10 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 
 	zmsg_t* ans_msg = zmsg_new();
 	zmsg_addstr(ans_msg, rep->message_id.c_str());
-	zmsg_addstr(ans_msg, ans.c_str());
+	zmsg_addstr(ans_msg, std::to_string(solver_status).c_str());
+	if(solver_status == 0){
+		zmsg_addstr(ans_msg, ans.c_str());
+	}
 	zmsg_prepend(ans_msg, &(rep->identity));
 	zmsg_send(&ans_msg, rep->solver_service);
 //	std::cout << "Sent solver_service answer\n";
