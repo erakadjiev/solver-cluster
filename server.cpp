@@ -227,7 +227,10 @@ int solver_result_handler(zloop_t* reactor, zmq_pollitem_t* child_pipe, void* ar
 	unsigned short solver_status = 0;
 	
 	int status;
-	pid_t res = waitpid(rep->pid, &status, WNOHANG | WUNTRACED);
+	pid_t res = 0;
+        while(res == 0){
+                res = waitpid(rep->pid, &status, WNOHANG | WUNTRACED);
+        }
 	
 	if (res < 0) {
 		std::cerr << "ERROR: waitpid() for STP failed";
